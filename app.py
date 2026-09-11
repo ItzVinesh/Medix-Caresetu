@@ -18,26 +18,45 @@ try:
 except Exception:
     ha = None
 
-# ------------------------------------------------------------
-# Optional OCR (pip install easyocr). App still runs without it.
-# ------------------------------------------------------------
+try:
+    import pytesseract
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+except Exception:
+    pass
+# ============================================================
+# OCR ENGINE (EasyOCR primary, Tesseract fallback)
+# ============================================================
 OCR_READER = None
 
-def get_ocr_reader():
+def ocr_extract(image_path):
     global OCR_READER
+    easy_err = tess_err = ""
     try:
         import easyocr
-    except Exception:
-        return None
-    if OCR_READER is None:
-        OCR_READER = easyocr.Reader(["en", "hi"], gpu=False)
-    return OCR_READER
+        if OCR_READER is None:
+            OCR_READER = easyocr.Reader(["en", "hi"], gpu=False, verbose=False)
+        lines = OCR_READER.readtext(image_path, detail=0)
+        return "\n".join(lines), "EasyOCR"
+    except Exception as e:
+        easy_err = str(e)
+    try:
+        import pytesseract
+        from PIL import Image
+        img = Image.open(image_path)
+        text = pytesseract.image_to_string(img, lang="eng+hin")
+        return text.strip(), "Tesseract"
+    except Exception as e:
+        tess_err = str(e)
+    raise RuntimeError(
+        f"EasyOCR failed: {easy_err} | Tesseract failed: {tess_err}. "
+        "Run: pip install easyocr (same environment as app.py), then restart."
+    )
 
 # ============================================================
 # APP + PATHS
 # ============================================================
 app = Flask(__name__)
-app.secret_key = "caresetu_login_secret_key_123"  
+app.secret_key = "change-this-to-a-strong-secret-key"
 
 USERS_CSV_FILE = os.path.join(app.root_path, "users.csv")
 PATIENTS_CSV_FILE = os.path.join(app.root_path, "patients.csv")
@@ -277,6 +296,22 @@ def patient_chat_response(message, searched_by, role, language="en"):
         return "यह रिकॉर्ड मौजूद है, लेकिन विवरण आपके अधिकार क्षेत्र में प्रतिबंधित हैं।"
     return "This record exists, but details are restricted for your role."
 
+def build_document_summary(doc, max_lines=8, max_chars=700):
+    text = (doc.get("extracted_text") or "").strip()
+    if not text or text.startswith("["):
+        return "No readable text was extracted from this document. Open the full file to review it."
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    picked, total = [], 0
+    for ln in lines:
+        if total + len(ln) > max_chars or len(picked) >= max_lines:
+            break
+        picked.append(ln)
+        total += len(ln) + 1
+    summary = "\n".join(picked)
+    if len(picked) < len(lines):
+        summary += "\n… (open the document to read the full text)"
+    return summary
+
 # ============================================================
 # AUTH
 # ============================================================
@@ -379,7 +414,16 @@ def patient_record(patient_id):
     if role == "patient":
         docs = [d for d in docs if (d.get("username") or "").upper() == (session.get("username") or "").upper()]
     docs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-    return render_template("patient_record.html", patient=patient, role=role, docs=docs)
+
+    approved_docs = []
+    for d in docs:
+        if d.get("status") == "Approved":
+            d = dict(d)
+            d["summary"] = build_document_summary(d)
+            approved_docs.append(d)
+
+    return render_template("patient_record.html", patient=patient, role=role,
+                           docs=docs, approved_docs=approved_docs)
 
 # ============================================================
 # ADMIN: ADD PATIENT / ADD DOCTOR
@@ -466,19 +510,13 @@ def upload_document():
     extracted_text = ""
     ocr_status = "Skipped (PDF)"
     if safe.lower().endswith((".png", ".jpg", ".jpeg")):
-        reader = get_ocr_reader()
-        if reader is None:
-            extracted_text = "[OCR unavailable: install easyocr (pip install easyocr)]"
+        try:
+            extracted_text, backend = ocr_extract(path)
+            ocr_status = f"Success ({backend})"
+        except RuntimeError as e:
+            print("OCR ERROR:", e)
+            extracted_text = f"[OCR unavailable: {e}]"
             ocr_status = "Unavailable"
-        else:
-            try:
-                result = reader.readtext(path, detail=0)
-                extracted_text = "\n".join(result)
-                ocr_status = "Success"
-            except Exception as e:
-                print("OCR Error:", e)
-                extracted_text = "[OCR Failed: could not read text from image]"
-                ocr_status = "Failed"
     else:
         extracted_text = "[PDF uploaded. Text extraction not applied.]"
 
@@ -493,8 +531,42 @@ def upload_document():
     flash(f"Prescription scanned ({ocr_status}) and sent for approval.")
     return redirect(url_for("patient_record", patient_id=pid))
 
+@app.route("/rescan-ocr/<request_id>")
+@login_required
+def rescan_ocr(request_id):
+    role = session.get("role")
+    rows = read_document_requests()
+    target = None
+    for r in rows:
+        if r.get("request_id") == request_id:
+            target = r
+            break
+    if not target:
+        abort(404)
+    if role == "patient":
+        if target.get("username") != session.get("username"):
+            abort(403)
+    elif role not in ("admin", "doctor"):
+        abort(403)
+    path = target.get("stored_path", "")
+    if not path or not os.path.exists(path):
+        flash("Original file not found for re-scan.")
+        return redirect(request.referrer or url_for("dashboard"))
+    if not path.lower().endswith((".png", ".jpg", ".jpeg")):
+        flash("Re-scan works only for image files (PNG/JPG).")
+        return redirect(request.referrer or url_for("dashboard"))
+    try:
+        text, backend = ocr_extract(path)
+        target["extracted_text"] = text
+        flash(f"OCR re-scan complete ({backend}). Summary updated.")
+    except RuntimeError as e:
+        target["extracted_text"] = f"[OCR unavailable: {e}]"
+        flash(f"OCR re-scan failed: {e}")
+    write_document_requests(rows)
+    return redirect(request.referrer or url_for("dashboard"))
+
 # ============================================================
-# SHARED APPROVALS (ADMIN + DOCTOR)
+# SHARED APPROVALS (ADMIN + DOCTOR) — REJECTION REQUIRES REASON
 # ============================================================
 @app.route("/approvals")
 @login_required
@@ -515,9 +587,18 @@ def review_document_request(request_id):
     role = session.get("role")
     if role not in ("admin", "doctor"):
         abort(403)
+
     status = request.form.get("status")
+    review_note = (request.form.get("review_note") or "").strip()
+
     if status not in ("Approved", "Rejected"):
         abort(400)
+
+    # MANDATORY reason on rejection (server-side enforcement)
+    if status == "Rejected" and not review_note:
+        flash("A reason is required to reject a document. Please provide the rejection reason.")
+        return redirect(url_for("approvals"))
+
     rows = read_document_requests()
     target = None
     for r in rows:
@@ -529,7 +610,7 @@ def review_document_request(request_id):
             r["status"] = status
             r["reviewed_by"] = session.get("username")
             r["reviewed_role"] = role
-            r["review_note"] = (request.form.get("review_note") or "").strip()
+            r["review_note"] = review_note
             if status == "Approved":
                 old = r.get("stored_path", "")
                 if old and os.path.exists(old):
@@ -541,8 +622,12 @@ def review_document_request(request_id):
             break
     if not target:
         abort(404)
+
     write_document_requests(rows)
-    flash(f"Document {status.lower()} by {role}.")
+    if status == "Rejected":
+        flash(f"Document rejected by {role}. Reason recorded: {review_note}")
+    else:
+        flash(f"Document approved by {role}.")
     return redirect(url_for("approvals"))
 
 @app.route("/documents/<request_id>/view")

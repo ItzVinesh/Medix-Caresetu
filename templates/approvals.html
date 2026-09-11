@@ -2,61 +2,165 @@
 {% from 'icons.html' import icon %}
 {% block page_title %}Document Approvals{% endblock %}
 {% block content %}
-  <section class="card">
-    <div class="card-head">
-      <div>
-        <h3>Patient Document Requests</h3>
-        <p class="card-sub">Visible to Admin and Doctor. Either role can approve or reject.</p>
-      </div>
+<section class="card">
+  <div class="card-head">
+    <div>
+      <h3>Patient Document Requests</h3>
+      <p class="card-sub">Visible to Admin and Doctor. Rejection requires a reason.</p>
     </div>
+  </div>
 
-    <div class="chips" style="margin-bottom:16px;">
-      <a class="chip" href="{{ url_for('approvals') }}">All</a>
-      <a class="chip" href="{{ url_for('approvals', status='Pending') }}">Pending</a>
-      <a class="chip" href="{{ url_for('approvals', status='Approved') }}">Approved</a>
-      <a class="chip" href="{{ url_for('approvals', status='Rejected') }}">Rejected</a>
+  <div class="chips">
+    <a class="chip" href="{{ url_for('approvals') }}">All</a>
+    <a class="chip" href="{{ url_for('approvals', status='Pending') }}">Pending</a>
+    <a class="chip" href="{{ url_for('approvals', status='Approved') }}">Approved</a>
+    <a class="chip" href="{{ url_for('approvals', status='Rejected') }}">Rejected</a>
+  </div>
+
+  {% if rows %}
+    <div class="table-wrap">
+      <table>
+        <tr>
+          <th>Document</th>
+          <th>AI Extracted Text (OCR)</th>
+          <th>Patient</th>
+          <th>Status</th>
+          <th>Action</th>
+        </tr>
+        {% for row in rows %}
+          <tr>
+            <td>
+              {{ row.get('original_filename','') }}<br><br>
+              <a class="btn btn-ghost btn-sm"
+                 href="{{ url_for('view_document', request_id=row.get('request_id')) }}"
+                 target="_blank">View Original</a>
+              <br><br>
+              <a class="btn btn-ghost btn-sm"
+                 href="{{ url_for('rescan_ocr', request_id=row.get('request_id')) }}">🔄 Re-scan OCR</a>
+              <br><br>
+              <small><strong>Note:</strong> {{ row.get('note','') or '-' }}</small>
+            </td>
+            <td style="max-width:350px;font-size:13px;white-space:pre-wrap;background:#f8fafc;padding:10px;border-radius:8px;border:1px solid var(--line);">
+              {{ row.get('extracted_text') or 'No text extracted' }}
+            </td>
+            <td>
+              <strong>{{ row.get('patient_id','') }}</strong><br>
+              <small>{{ row.get('username','') }}</small>
+            </td>
+            <td>
+              {% if row.get('status') == 'Approved' %}
+                <span class="badge ok">Approved</span>
+              {% elif row.get('status') == 'Rejected' %}
+                <span class="badge bad">Rejected</span>
+                {% if row.get('review_note') %}
+                  <br><small style="color:var(--danger);"><strong>Reason:</strong> {{ row.get('review_note') }}</small>
+                {% endif %}
+              {% else %}
+                <span class="badge warn">Pending</span>
+              {% endif %}
+              <br><br>
+              <small>
+                {% if row.get('reviewed_by') %}By: {{ row.get('reviewed_by') }} ({{ row.get('reviewed_role','')|capitalize }}){% endif %}
+              </small>
+            </td>
+            <td>
+              {% if row.get('status') == 'Pending' %}
+                <form method="post"
+                      action="{{ url_for('review_document_request', request_id=row.get('request_id')) }}">
+                  <input type="hidden" name="status" value="Approved">
+                  <input type="text" name="review_note" placeholder="Approval note (optional)"
+                         style="min-width:150px;margin-bottom:8px;">
+                  <button class="btn btn-success btn-sm" type="submit">{{ icon('check') }} Approve</button>
+                </form>
+                <button class="btn btn-danger btn-sm reject-btn" type="button" style="margin-top:8px;"
+                        data-request-id="{{ row.get('request_id') }}"
+                        data-filename="{{ row.get('original_filename') }}">
+                  {{ icon('stop') }} Reject
+                </button>
+              {% else %}
+                <span style="color:var(--muted);font-size:12px;">Reviewed</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </table>
     </div>
+  {% else %}
+    <p class="card-sub">No document requests found.</p>
+  {% endif %}
+</section>
 
-    {% if rows %}
-      <div class="table-wrap">
-        <table>
-          <tr><th>Document</th><th>Patient</th><th>Uploaded By</th><th>Note</th><th>Status</th><th>Reviewed By</th><th>Action</th></tr>
-          {% for row in rows %}
-            <tr>
-              <td>
-                {{ row.get('original_filename','') }}
-                <br><br>
-                <a href="{{ url_for('view_document', request_id=row.get('request_id')) }}" target="_blank">View Document</a>
-              </td>
-              <td><strong style="color:var(--ink);">{{ row.get('patient_id','') }}</strong></td>
-              <td>{{ row.get('username','') }}<br><small>{{ row.get('timestamp','')[:10] }}</small></td>
-              <td>{{ row.get('note','') or '-' }}</td>
-              <td>
-                {% if row.get('status') == 'Approved' %}<span class="badge ok">Approved</span>
-                {% elif row.get('status') == 'Rejected' %}<span class="badge bad">Rejected</span>
-                {% else %}<span class="badge warn">Pending</span>{% endif %}
-              </td>
-              <td>
-                {% if row.get('reviewed_by') %}
-                  {{ row.get('reviewed_by') }} ({{ row.get('reviewed_role','') | capitalize }})
-                  {% if row.get('review_note') %}<br><small>Note: {{ row.get('review_note') }}</small>{% endif %}
-                {% else %}-{% endif %}
-              </td>
-              <td>
-                {% if row.get('status') == 'Pending' %}
-                  <form method="post" action="{{ url_for('review_document_request', request_id=row.get('request_id')) }}">
-                    <input type="text" name="review_note" placeholder="Review note (optional)" style="min-width:180px;margin-bottom:8px;">
-                    <div style="display:flex;gap:8px;">
-                      <button class="btn btn-success btn-sm" name="status" value="Approved" type="submit">{{ icon('check') }} Approve</button>
-                      <button class="btn btn-danger btn-sm" name="status" value="Rejected" type="submit">{{ icon('stop') }} Reject</button>
-                    </div>
-                  </form>
-                {% else %}Already reviewed{% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </table>
-      </div>
-    {% else %}<p>No document requests found.</p>{% endif %}
-  </section>
+{# ============ REJECTION REASON MODAL (reason is mandatory) ============ #}
+<div id="rejectModal"
+     style="display:none;position:fixed;inset:0;background:rgba(11,27,43,.55);z-index:100;align-items:center;justify-content:center;padding:16px;">
+  <div style="background:#fff;border-radius:16px;max-width:480px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,.25);">
+    <h3 style="margin:0 0 6px;color:var(--danger,#C93A3A);">Rejection Reason Required</h3>
+    <p style="margin:0 0 4px;color:var(--muted,#64788C);font-size:13px;">
+      Document: <strong id="rejectFileLabel"></strong>
+    </p>
+    <p style="margin:0 0 12px;color:var(--muted,#64788C);font-size:13px;">
+      Explain why this document is being rejected. The patient will see this reason.
+    </p>
+    <textarea id="rejectReason" rows="4"
+      placeholder="e.g. Image is blurred / prescription date not visible / wrong document uploaded…"
+      style="width:100%;padding:10px;border:1px solid #CFDCE4;border-radius:10px;font:inherit;"></textarea>
+    <div id="rejectError"
+         style="display:none;margin-top:8px;color:#C93A3A;font-size:13px;font-weight:700;">
+      A rejection reason is required.
+    </div>
+    <form id="rejectForm" method="post"
+          style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;">
+      <input type="hidden" name="status" value="Rejected">
+      <input type="hidden" name="review_note" id="rejectNoteInput" value="">
+      <button type="button" class="btn btn-ghost" onclick="closeRejectModal()">Cancel</button>
+      <button type="button" class="btn btn-danger" onclick="confirmReject()">Confirm Rejection</button>
+    </form>
+  </div>
+</div>
+
+<script>
+  const reviewUrlTemplate = "{{ url_for('review_document_request', request_id='__ID__') }}";
+  const rejectModal = document.getElementById('rejectModal');
+
+  function openRejectModal(requestId, filename) {
+    document.getElementById('rejectFileLabel').textContent = filename;
+    document.getElementById('rejectForm').action = reviewUrlTemplate.replace('__ID__', requestId);
+    document.getElementById('rejectReason').value = '';
+    document.getElementById('rejectError').style.display = 'none';
+    rejectModal.style.display = 'flex';
+    document.getElementById('rejectReason').focus();
+  }
+
+  function closeRejectModal() {
+    rejectModal.style.display = 'none';
+  }
+
+  function confirmReject() {
+    const reason = document.getElementById('rejectReason').value.trim();
+    if (!reason) {
+      document.getElementById('rejectError').style.display = 'block';
+      return;
+    }
+    document.getElementById('rejectNoteInput').value = reason;
+    document.getElementById('rejectForm').submit();
+  }
+
+  // Bind Reject buttons via data-* attributes (no Jinja inside inline JS → no lint errors)
+  document.querySelectorAll('.reject-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      openRejectModal(
+        btn.getAttribute('data-request-id'),
+        btn.getAttribute('data-filename')
+      );
+    });
+  });
+
+  // Close modal on Escape or outside click
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeRejectModal();
+  });
+  rejectModal.addEventListener('click', function (e) {
+    if (e.target === rejectModal) closeRejectModal();
+  });
+</script>
 {% endblock %}

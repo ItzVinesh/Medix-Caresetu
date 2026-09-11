@@ -44,6 +44,28 @@
   </section>
 </div>
 
+{% if role in ['doctor','admin'] and approved_docs %}
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h3>📄 Approved Document Summaries (AI OCR)</h3>
+        <p class="card-sub">Quick summary of documents approved for this patient.</p>
+      </div>
+    </div>
+    {% for doc in approved_docs %}
+      <div style="border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px;background:var(--surface-2);">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+          <strong>{{ doc.get('original_filename','') }}</strong>
+          <span class="badge ok">Approved</span>
+          {% if doc.get('reviewed_by') %}<small style="color:var(--muted);">by {{ doc.get('reviewed_by') }} ({{ doc.get('reviewed_role','')|capitalize }})</small>{% endif %}
+          <a class="btn btn-ghost btn-sm" style="margin-left:auto;" href="{{ url_for('view_document', request_id=doc.get('request_id')) }}" target="_blank">Open Full Document</a>
+        </div>
+        <p style="white-space:pre-wrap;font-size:14px;color:var(--ink-2);margin:0;">{{ doc.get('summary','') }}</p>
+      </div>
+    {% endfor %}
+  </section>
+{% endif %}
+
 {% if role == 'patient' %}
   <section class="card" style="border:2px dashed var(--brand);background:var(--brand-soft);">
     <div class="card-head">
@@ -67,7 +89,7 @@
   {% if docs %}
     <div class="table-wrap">
       <table>
-        <tr><th>File</th><th>AI Extracted Text (OCR)</th><th>Status</th><th>Reviewed By</th><th>View</th></tr>
+        <tr><th>File</th><th>AI Extracted Text (OCR)</th><th>Status</th><th>Reviewed By</th><th>Actions</th></tr>
         {% for doc in docs %}
           <tr>
             <td><strong>{{ doc.get('original_filename','') }}</strong><br><small style="color:var(--muted);">{{ doc.get('note','') or 'No note' }}</small></td>
@@ -78,14 +100,23 @@
             </td>
             <td>
               {% if doc.get('status') == 'Approved' %}<span class="badge ok">Approved</span>
-              {% elif doc.get('status') == 'Rejected' %}<span class="badge bad">Rejected</span>
+              {% elif doc.get('status') == 'Rejected' %}
+                <span class="badge bad">Rejected</span>
+                {% if doc.get('review_note') %}
+                  <br><small style="color:var(--danger);"><strong>Reason:</strong> {{ doc.get('review_note') }}</small>
+                {% endif %}
               {% else %}<span class="badge warn">Pending</span>{% endif %}
             </td>
             <td>{% if doc.get('reviewed_by') %}{{ doc.get('reviewed_by') }} ({{ doc.get('reviewed_role','')|capitalize }}){% else %}-{% endif %}</td>
             <td>
-              {% if role in ['admin','doctor'] or doc.get('status') == 'Approved' %}
-                <a class="btn btn-ghost btn-sm" href="{{ url_for('view_document', request_id=doc.get('request_id')) }}" target="_blank">View</a>
-              {% else %}<span style="color:var(--muted);font-size:12px;">Awaiting</span>{% endif %}
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                {% if role in ['admin','doctor'] or doc.get('status') == 'Approved' %}
+                  <a class="btn btn-ghost btn-sm" href="{{ url_for('view_document', request_id=doc.get('request_id')) }}" target="_blank">View</a>
+                {% endif %}
+                {% if doc.get('original_filename','').lower().endswith(('.png','.jpg','.jpeg')) %}
+                  <a class="btn btn-ghost btn-sm" href="{{ url_for('rescan_ocr', request_id=doc.get('request_id')) }}">🔄 Re-scan</a>
+                {% endif %}
+              </div>
             </td>
           </tr>
         {% endfor %}
